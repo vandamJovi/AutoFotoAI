@@ -26,7 +26,14 @@ class App(ctk.CTk):
         self.dest_folder = tk.StringVar()
         self.image_vars: dict[str, tk.BooleanVar] = {}
 
+        source, dest = config.load_paths()
+        self.source_folder.set(source)
+        self.dest_folder.set(dest)
+
         self._build_ui()
+
+        if source and os.path.isdir(source):
+            self._load_images(source)
 
     # ── UI Construction ──────────────────────────────────────────
 
@@ -80,17 +87,31 @@ class App(ctk.CTk):
         right.grid(row=1, column=1, sticky="nsew", padx=(4, 8), pady=8)
         right.grid_rowconfigure(2, weight=1)
 
-        ctk.CTkLabel(right, text="Prompt (Bearbeitungsanweisung)").grid(row=0, column=0, sticky="w", padx=10, pady=(10, 2))
+        top_row = ctk.CTkFrame(right, fg_color="transparent")
+        top_row.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 8))
+        top_row.grid_columnconfigure(0, weight=2)
+        top_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(top_row, text="Modell").grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(top_row, text="Format").grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        self.model_var = tk.StringVar(value=config.load_model())
+        ctk.CTkOptionMenu(top_row, values=config.MODELS, variable=self.model_var, command=self._on_model_change).grid(row=1, column=0, sticky="ew")
+
+        self.format_var = tk.StringVar(value=config.load_format())
+        ctk.CTkOptionMenu(top_row, values=config.FORMATS, variable=self.format_var, command=self._on_format_change).grid(row=1, column=1, sticky="ew", padx=(8, 0))
+
+        ctk.CTkLabel(right, text="Prompt (Bearbeitungsanweisung)").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 2))
         self.prompt_box = ctk.CTkTextbox(right, width=360, height=100)
-        self.prompt_box.grid(row=1, column=0, sticky="ew", padx=10)
+        self.prompt_box.grid(row=2, column=0, sticky="ew", padx=10)
 
         self.run_btn = ctk.CTkButton(right, text="▶  Verarbeiten", height=40, command=self._start_processing)
-        self.run_btn.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        self.run_btn.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
 
-        ctk.CTkLabel(right, text="Status").grid(row=3, column=0, sticky="w", padx=10)
+        ctk.CTkLabel(right, text="Status").grid(row=4, column=0, sticky="w", padx=10)
         self.log_box = ctk.CTkTextbox(right, width=360, height=280, state="disabled")
-        self.log_box.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        right.grid_rowconfigure(4, weight=1)
+        self.log_box.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        right.grid_rowconfigure(5, weight=1)
 
     # ── Actions ──────────────────────────────────────────────────
 
@@ -115,16 +136,24 @@ class App(ctk.CTk):
 
         ctk.CTkButton(dialog, text="Speichern", command=save).pack(pady=16)
 
+    def _on_model_change(self, value: str):
+        config.save_model(value)
+
+    def _on_format_change(self, value: str):
+        config.save_format(value)
+
     def _pick_source(self):
         folder = filedialog.askdirectory()
         if folder:
             self.source_folder.set(folder)
             self._load_images(folder)
+            config.save_paths(folder, self.dest_folder.get())
 
     def _pick_dest(self):
         folder = filedialog.askdirectory()
         if folder:
             self.dest_folder.set(folder)
+            config.save_paths(self.source_folder.get(), folder)
 
     def _load_images(self, folder: str):
         for widget in self.scroll_frame.winfo_children():
@@ -177,17 +206,19 @@ class App(ctk.CTk):
             return
 
         self.run_btn.configure(state="disabled")
-        threading.Thread(target=self._process, args=(selected, prompt, dest), daemon=True).start()
+        model = self.model_var.get()
+        fmt = self.format_var.get()
+        threading.Thread(target=self._process, args=(selected, prompt, dest, model, fmt), daemon=True).start()
 
-    def _process(self, files: list[str], prompt: str, dest: str):
+    def _process(self, files: list[str], prompt: str, dest: str, model: str, fmt: str):
         source = self.source_folder.get()
         total = len(files)
 
         for i, fname in enumerate(files, 1):
             self._log(f"[{i}/{total}] {fname} …")
             try:
-                result = api.edit_image(self.api_key, os.path.join(source, fname), prompt)
-                out = api.save_result(result, dest, fname)
+                result = api.edit_image(self.api_key, os.path.join(source, fname), prompt, model)
+                out = api.save_result(result, dest, fname, fmt)
                 self._log(f"  ✓ gespeichert: {os.path.basename(out)}")
             except Exception as e:
                 self._log(f"  ✗ Fehler: {e}")
